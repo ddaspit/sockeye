@@ -46,6 +46,7 @@ from . import loss
 from . import layers
 from . import lr_scheduler
 from . import model
+from . import noise
 from . import rnn
 from . import rnn_attention
 from . import training
@@ -246,6 +247,27 @@ def create_data_iters_and_vocabs(args: argparse.Namespace,
                                        "with %s." % (C.TRAINING_ARG_SOURCE,
                                                      C.TRAINING_ARG_TARGET,
                                                      C.TRAINING_ARG_PREPARED_DATA)
+
+    if args.source_noise_train or args.source_noise_validation or args.target_noise_train or args.target_noise_validation:
+        if resume_training:
+            noise_config_path = os.path.join(output_folder, C.NOISE_MODEL_CONFIG)
+            noise_config = cast(noise.NoiseModelConfig, Config.load(noise_config_path))
+            logger.info("Noise config loaded from: {}".format(noise_config_path))
+        else:
+            noise_config = noise.NoiseModelConfig(args.source_noise_permutation,
+                                                  args.source_noise_deletion,
+                                                  args.source_noise_insertion,
+                                                  args.source_noise_insertion_vocab)
+            noise_config.save(os.path.join(output_folder, C.NOISE_MODEL_CONFIG))
+        logger.info("Using noise model with: permutation = {}, "
+                    "deletion = {}, insertion = {}, "
+                    "insertion_vocab = {}".format(noise_config.permutation,
+                                                  noise_config.deletion,
+                                                  noise_config.insertion,
+                                                  noise_config.insertion_vocab))
+    else:
+        noise_config = None
+
     if args.prepared_data is not None:
         utils.check_condition(args.source is None and args.target is None, either_raw_or_prepared_error_msg)
         if not resume_training:
@@ -259,7 +281,12 @@ def create_data_iters_and_vocabs(args: argparse.Namespace,
             shared_vocab=shared_vocab,
             batch_size=args.batch_size,
             batch_by_words=batch_by_words,
-            batch_num_devices=batch_num_devices)
+            batch_num_devices=batch_num_devices,
+            source_noise_train=args.source_noise_train,
+            source_noise_validation=args.source_noise_validation,
+            target_noise_train=args.target_noise_train,
+            target_noise_validation=args.target_noise_validation,
+            noise_config=noise_config)
 
         check_condition(args.source_factors_combine == C.SOURCE_FACTORS_COMBINE_SUM \
                         or len(source_vocabs) == len(args.source_factors_num_embed) + 1,
@@ -344,7 +371,12 @@ def create_data_iters_and_vocabs(args: argparse.Namespace,
             max_seq_len_source=max_seq_len_source,
             max_seq_len_target=max_seq_len_target,
             bucketing=not args.no_bucketing,
-            bucket_width=args.bucket_width)
+            bucket_width=args.bucket_width,
+            source_noise_train=args.source_noise_train,
+            source_noise_validation=args.source_noise_validation,
+            target_noise_train=args.target_noise_train,
+            target_noise_validation=args.target_noise_validation,
+            noise_config=noise_config)
 
         data_info_fname = os.path.join(output_folder, C.DATA_INFO)
         logger.info("Writing data config to '%s'", data_info_fname)

@@ -310,6 +310,9 @@ def add_extract_args(params):
     extract_params.add_argument('--output', '-o',
                                 type=str,
                                 help="File to write extracted parameters to (in .npz format).")
+    extract_params.add_argument('--text-output', '-t',
+                                action='store_true',
+                                help='Extracted parameters are stored in plain text files.')
 
 
 def add_rerank_args(params):
@@ -450,6 +453,7 @@ def add_training_io_args(params):
     add_vocab_args(params)
     add_training_output_args(params)
     add_monitoring_args(params)
+    add_noise_data_args(params)
 
 
 def add_bucketing_args(params):
@@ -1482,3 +1486,43 @@ def add_init_embedding_args(params):
                         help='File to write initialized parameters to.')
     params.add_argument('--encoding', '-c', type=str, default=C.VOCAB_ENCODING,
                         help='Open input vocabularies with specified encoding. Default: %(default)s.')
+
+
+def add_replace_embedding_args(params):
+    params.add_argument('--embed-file', '-e', type=str, required=True,
+                        help='Pre-trained embedding file in .vec format.')
+    params.add_argument('--params', '-p', type=str, required=True,
+                        help='Sockeye model parameter file with which the embedding will be replaced.')
+    params.add_argument('--side', '-s', type=str, default='source',
+                        help='Side of the embedding to be replaced (source|target).')
+    params.add_argument('--output-params', '-o', type=str,
+                        help='Output file to write new model parameters to.')
+    params.add_argument('--vocab-file', '-v', type=str,
+                        help='Output file to write a new vocabulary to.')
+
+
+def add_noise_data_args(params):
+    params.add_argument('--source-noise-train', required=False, action="store_true",
+                        help='Add artificial noise to source part of the training data.')
+    params.add_argument('--source-noise-validation', required=False, action="store_true",
+                        help='Add artificial noise to source part of the validation data.')
+    params.add_argument('--source-noise-permutation', required=False, type=int, default=0,
+                        help='Maximum distance allowed for permutation of a source sentence.\n'
+                        'Only effective when --source-noise-train or --source-noise-validation\n'
+                        'is turned on.')
+    params.add_argument('--source-noise-deletion', required=False, type=float, default=0.0,
+                        help='Probability of deleting words from a source sentence.\n'
+                        'Only effective when --source-noise-train or --source-noise-validation\n'
+                        'is turned on.')
+    params.add_argument('--source-noise-insertion', required=False, type=float, default=0.0,
+                        help='Probability of inserting words to a source sentence.\n'
+                        'Only effective when --source-noise-train or --source-noise-validation\n'
+                        'is turned on.')
+    params.add_argument('--source-noise-insertion-vocab', required=False, type=int, default=0,
+                        help='Vocabulary size of top frequent words for --source-noise-insertion.\n'
+                        'Only effective when --source-noise-train or --source-noise-validation\n'
+                        'is turned on and --source-noise-insertion has a nonzero value.')
+    params.add_argument('--target-noise-train', required=False, action="store_true",
+                        help='Add artificial noise to target part of the training data.')
+    params.add_argument('--target-noise-validation', required=False, action="store_true",
+                        help='Add artificial noise to target part of the validation data.')

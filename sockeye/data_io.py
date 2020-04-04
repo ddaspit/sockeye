@@ -15,6 +15,7 @@
 Implements data iterators and I/O related functions for sequence-to-sequence models.
 """
 import bisect
+import copy
 import logging
 import math
 import os
@@ -30,6 +31,7 @@ import numpy as np
 
 from . import config
 from . import constants as C
+from . import noise
 from . import vocab
 from .utils import check_condition, smart_open, get_tokens, OnlineMeanAndVariance
 
@@ -661,7 +663,10 @@ def get_validation_data_iter(data_loader: RawParallelDatasetLoader,
                              target_vocab: vocab.Vocab,
                              max_seq_len_source: int,
                              max_seq_len_target: int,
-                             batch_size: int) -> 'ParallelSampleIter':
+                             batch_size: int,
+                             source_noise: bool,
+                             target_noise: bool,
+                             noise_model: noise.NoiseModel) -> 'ParallelSampleIter':
     """
     Returns a ParallelSampleIter for the validation data.
     """
@@ -692,11 +697,19 @@ def get_validation_data_iter(data_loader: RawParallelDatasetLoader,
     validation_data = data_loader.load(validation_sources_sentences, validation_target_sentences,
                                        validation_data_statistics.num_sents_per_bucket).fill_up(bucket_batch_sizes)
 
+    if source_noise:
+        logger.info("Noise will be applied to source side of the validation data.")
+    if target_noise:
+        logger.info("Noise will be applied to target side of the validation data.")
+
     return ParallelSampleIter(data=validation_data,
                               buckets=buckets,
                               batch_size=batch_size,
                               bucket_batch_sizes=bucket_batch_sizes,
-                              num_factors=len(validation_sources))
+                              num_factors=len(validation_sources),
+                              source_noise=source_noise,
+                              target_noise=target_noise,
+                              noise_model=noise_model)
 
 
 def get_prepared_data_iters(prepared_data_dir: str,
@@ -706,9 +719,14 @@ def get_prepared_data_iters(prepared_data_dir: str,
                             batch_size: int,
                             batch_by_words: bool,
                             batch_num_devices: int,
+                            source_noise_train: bool,
+                            source_noise_validation: bool,
+                            target_noise_train: bool,
+                            target_noise_validation: bool,
+                            noise_config: noise.NoiseModelConfig,
                             permute: bool = True) -> Tuple['BaseParallelSampleIter',
-                                                           'BaseParallelSampleIter',
-                                                           'DataConfig', List[vocab.Vocab], vocab.Vocab]:
+                                                            'BaseParallelSampleIter',
+                                                            'DataConfig', List[vocab.Vocab], vocab.Vocab]:
     logger.info("===============================")
     logger.info("Creating training data iterator")
     logger.info("===============================")
@@ -758,6 +776,12 @@ def get_prepared_data_iters(prepared_data_dir: str,
 
     config_data.data_statistics.log(bucket_batch_sizes)
 
+    noise_model = noise.get_noise_model(noise_config) if noise_config else None
+    if source_noise_train:
+        logger.info("Noise will be applied to source side of the training data.")
+    if target_noise_train:
+        logger.info("Noise will be applied to source side of the training data.")
+
     train_iter = ShardedParallelSampleIter(shard_fnames,
                                            buckets,
                                            batch_size,
@@ -778,7 +802,10 @@ def get_prepared_data_iters(prepared_data_dir: str,
                                                target_vocab=target_vocab,
                                                max_seq_len_source=max_seq_len_source,
                                                max_seq_len_target=max_seq_len_target,
-                                               batch_size=batch_size)
+                                               batch_size=batch_size,
+                                               source_noise=source_noise_validation,
+                                               target_noise=target_noise_validation,
+                                               noise_model=noise_model if source_noise_validation or target_noise_validation else None)
 
     return train_iter, validation_iter, config_data, source_vocabs, target_vocab
 
@@ -799,6 +826,11 @@ def get_training_data_iters(sources: List[str],
                             max_seq_len_target: int,
                             bucketing: bool,
                             bucket_width: int,
+                            source_noise_train: bool,
+                            source_noise_validation: bool,
+                            target_noise_train: bool,
+                            target_noise_validation: bool,
+                            noise_config: noise.NoiseModelConfig,
                             allow_empty: bool = False) -> Tuple['BaseParallelSampleIter',
                                                                 Optional['BaseParallelSampleIter'],
                                                                 'DataConfig', 'DataInfo']:
@@ -864,6 +896,8 @@ def get_training_data_iters(sources: List[str],
     training_data = data_loader.load(sources_sentences, target_sentences,
                                      data_statistics.num_sents_per_bucket).fill_up(bucket_batch_sizes)
 
+    noise_model = noise.get_noise_model(noise_config) if noise_config else None
+
     data_info = DataInfo(sources=sources,
                          target=target,
                          source_vocabs=source_vocab_paths,
@@ -877,12 +911,20 @@ def get_training_data_iters(sources: List[str],
                              num_source_factors=len(sources),
                              source_with_eos=True)
 
+    if source_noise_train:
+        logger.info("Noise will be applied to source side of the training data.")
+    if target_noise_train:
+        logger.info("Noise will be applied to target side of the training data.")
+
     train_iter = ParallelSampleIter(data=training_data,
                                     buckets=buckets,
                                     batch_size=batch_size,
                                     bucket_batch_sizes=bucket_batch_sizes,
                                     num_factors=len(sources),
-                                    permute=True)
+                                    permute=True,
+                                    source_noise=source_noise_train,
+                                    target_noise=target_noise_train,
+                                    noise_model=noise_model if source_noise_train or target_noise_train else None)
 
     validation_iter = get_validation_data_iter(data_loader=data_loader,
                                                validation_sources=validation_sources,
@@ -893,7 +935,10 @@ def get_training_data_iters(sources: List[str],
                                                target_vocab=target_vocab,
                                                max_seq_len_source=max_seq_len_source,
                                                max_seq_len_target=max_seq_len_target,
-                                               batch_size=batch_size)
+                                               batch_size=batch_size,
+                                               source_noise=source_noise_validation,
+                                               target_noise=target_noise_validation,
+                                               noise_model=noise_model if source_noise_validation or target_noise_validation else None)
 
     return train_iter, validation_iter, config_data, data_info
 
@@ -1707,13 +1752,19 @@ class ShardedParallelSampleIter(BaseParallelSampleIter):
                  label_name=C.TARGET_LABEL_NAME,
                  num_factors: int = 1,
                  permute: bool = True,
-                 dtype='float32') -> None:
+                 dtype='float32',
+                 source_noise: bool = False,
+                 target_noise: bool = False,
+                 noise_model: noise.NoiseModel = None) -> None:
         super().__init__(buckets=buckets, batch_size=batch_size, bucket_batch_sizes=bucket_batch_sizes,
                          source_data_name=source_data_name, target_data_name=target_data_name,
                          label_name=label_name, num_factors=num_factors, permute=permute, dtype=dtype)
         assert len(shards_fnames) > 0
         self.shards_fnames = list(shards_fnames)
         self.shard_index = -1
+        self.source_noise = source_noise
+        self.target_noise = target_noise
+        self.noise_model = noise_model
 
         self.reset()
 
@@ -1729,7 +1780,10 @@ class ShardedParallelSampleIter(BaseParallelSampleIter):
                                              source_data_name=self.source_data_name,
                                              target_data_name=self.target_data_name,
                                              num_factors=self.num_factors,
-                                             permute=self.permute)
+                                             permute=self.permute,
+                                             source_noise=self.source_noise,
+                                             target_noise=self.target_noise,
+                                             noise_model=self.noise_model)
 
     def reset(self):
         if len(self.shards_fnames) > 1:
@@ -1798,13 +1852,19 @@ class ParallelSampleIter(BaseParallelSampleIter):
                  label_name=C.TARGET_LABEL_NAME,
                  num_factors: int = 1,
                  permute: bool = True,
-                 dtype='float32') -> None:
+                 dtype='float32',
+                 source_noise: bool = False,
+                 target_noise: bool = False,
+                 noise_model: noise.NoiseModel = None) -> None:
         super().__init__(buckets=buckets, batch_size=batch_size, bucket_batch_sizes=bucket_batch_sizes,
                          source_data_name=source_data_name, target_data_name=target_data_name,
                          label_name=label_name, num_factors=num_factors, permute=permute, dtype=dtype)
 
         # create independent lists to be shuffled
         self.data = ParallelDataSet(list(data.source), list(data.target), list(data.label))
+        self.source_noise = source_noise
+        self.target_noise = target_noise
+        self.noise_model = noise_model
 
         # create index tuples (buck_idx, batch_start_pos) into buckets.
         # This is the list of all batches across all buckets in the dataset. These will be shuffled.
@@ -1841,6 +1901,10 @@ class ParallelSampleIter(BaseParallelSampleIter):
         """
         return self.curr_batch_index != len(self.batch_indices)
 
+    def apply_noise(self, sentences):
+        noisy_sentences = self.noise_model.apply_noise(sentences)
+        return noisy_sentences
+
     def next(self) -> mx.io.DataBatch:
         """
         Returns the next batch from the data iterator.
@@ -1853,7 +1917,13 @@ class ParallelSampleIter(BaseParallelSampleIter):
 
         batch_size = self.bucket_batch_sizes[i].batch_size
         source = self.data.source[i][j:j + batch_size]
+        if self.source_noise:
+            source = self.apply_noise(copy.copy(source))
         target = self.data.target[i][j:j + batch_size]
+        if self.target_noise:
+            target_expanded = mx.nd.expand_dims(copy.copy(target), axis=2)
+            target_expanded = self.apply_noise(target_expanded)
+            target = mx.ndarray.flatten(target_expanded)
         data = [source, target]
         label = [self.data.label[i][j:j + batch_size]]
 
